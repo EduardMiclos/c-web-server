@@ -2,10 +2,14 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
 #include <netinet/in.h>
 #include <strings.h>
 #include <unistd.h>
 #include <string.h>
+#include <pthread.h>
 
 #define SERVER "raspberry-miclos/0.1"
 #define SERVER_PROTOCOL "HTTP/2.0"
@@ -20,11 +24,13 @@
 #define SERVER_START_MSG {printf("Server started on port: %d\n", PORT_ID);}
 
 #define ERR_HANDLE(msg) {printf(msg); exit(EXIT_FAILURE);}
+
 #define SOCKET_ERR_HANDLE ERR_HANDLE("Error when trying to create a socket.\n")
 #define SOCKET_BEHAVIOUR_ERR_HANDLE ERR_HANDLE("Error when trying to establish options for connection socket.\n")
 #define BIND_ERR_HANDLE ERR_HANDLE("Binding file descriptor on port failed!\n")
 #define LISTEN_ERR_HANDLE ERR_HANDLE("Server listening failed!\n")
 #define CONNECT_ERR_HANDLE ERR_HANDLE("Connection not accepted!\n")
+#define MEM_ERR_HANDLE ERR_HANDLE("Error occured when trying to allocate memory!\n");
 
 typedef struct {
 	/** Examples of codes and messages:
@@ -55,7 +61,6 @@ typedef struct {
 
 	int content_length;
 
-
 	status_t status;
 } header_t;
 
@@ -68,7 +73,10 @@ typedef struct {
 
 
 char* response_createheader(response_t response) {
-	char *header = (char*)malloc(sizeof(char) * HEADER_LEN);
+	char *header;
+	
+	if (!(header = (char*)malloc(sizeof(char) * HEADER_LEN)))
+		MEM_ERR_HANDLE;
 
 	snprintf(header, 
 		 HEADER_LEN, 
@@ -83,14 +91,14 @@ char* response_createheader(response_t response) {
 }
 
 void response_init(response_t *response) {
-	(*response).header.prot_v = SERVER_PROTOCOL;
-	(*response).header.server = SERVER;
-	(*response).header.content_type = "text/html; charset=UTF-8";
-	(*response).header.content_length = 0;
-	(*response).header.last_modified = "";
+	response->header.prot_v = SERVER_PROTOCOL;
+	response->header.server = SERVER;
+	response->header.content_type = "text/html; charset=UTF-8";
+	response->header.content_length = 0;
+	response->header.last_modified = "";
 
-	(*response).header.status.code = "200";
-	(*response).header.status.msg = "OK";
+	response->header.status.code = "200";
+	response->header.status.msg = "OK";
 }
 
 int get_file_size(FILE *fptr) {
@@ -103,16 +111,89 @@ int get_file_size(FILE *fptr) {
 
 char *get_file_name(char *http_request) {
 	char *token = strtok(http_request, " ");
-	token = strtok(NULL, " ");
+
+	if (token)
+		token = strtok(NULL, " ");
 
 	return token;
 }
 
 char *get_file_content(FILE *fptr, int file_size) {
-	char *content = (char *) malloc(sizeof(char) * (file_size + 1));
+	char *content;
+	
+	if (!(content = (char *) malloc(sizeof(char) * (file_size + 1))))
+		MEM_ERR_HANDLE;
+
 	fread(content, file_size, 1, fptr);
 
 	return content;
+}
+
+char *read_file(char *path, int *file_size) {
+	FILE *fptr = fopen(path, "r");
+		
+	*file_size = get_file_size(fptr);
+	char *content = get_file_content(fptr, *file_size);
+
+	fclose(fptr);
+
+	return content;
+}
+
+void setup_response(response_t *response, char *client_msg) {
+	/** Extracting the name of the file from the request message. */
+	char file_name[255];
+	strcpy(file_name, get_file_name(client_msg));
+
+	/** Setting up the full path to the file. */
+	char path[255] = "./httdocs/";
+	strcat(path, file_name);
+
+	/** If the file doesn't exist, return err.html with 404 error code. */
+	if (access(path, F_OK) != 0) {	
+		response->header.status.code = "404";
+		response->header.status.msg = "Not Found";
+
+		strcpy(path, "./httdocs/");
+		strcat(path, "err.html");
+	}
+
+	int file_size;
+	char *content = read_file(path, &file_size);
+
+	/** Setting the length of the file content. */
+	response->header.content_length = file_size;
+
+	/** Setting the 'last modified' header value using struct stat attr. */
+	struct stat attr;
+	stat(path, &attr);
+	response->header.last_modified = strtok(ctime(&attr.st_mtime), "\r\n");
+
+	/** The first part of the response is always the header. */
+	response->content = response_createheader(*response);
+
+	response->content = (char*)realloc(response->content, sizeof(char) * (HEADER_LEN + file_size + 1));
+	response->content = strcat(response->content, content);
+	
+}
+
+void *handle_client(void *socket) {
+	int sock_id = (int)socket;
+
+	/** Message buffer. This is where we store the messages we receive from the client side. */
+	char client_msg[MSG_MAX_LEN] = {0};
+
+	/** Preparing the response for the client. */
+	response_t response;
+	response_init(&response);
+
+	/** Reading the message sent from the client. */
+	recv(sock_id, &client_msg, MSG_MAX_LEN, 0);	
+
+	setup_response(&response, client_msg);
+	send(sock_id, response.content, strlen(response.content) - 1, 0);
+
+	close(sock_id);
 }
 
 int main() {
@@ -121,9 +202,6 @@ int main() {
 
 	/** Socket 2 file descriptor. This socket is associated with the connection. */
 	int sockfd_2;
-
-	/** Message buffer. This is where we store the messages we receive from the client side. */
-	char client_msg[MSG_MAX_LEN] = {0};
 
 	/** Local socket address, describing the characteristics of our server: family, port etc.. */
 	struct sockaddr_in local_addr;
@@ -158,53 +236,17 @@ int main() {
 
 	SERVER_START_MSG;
 
-
-	/** Preparing the response to the client. */
-	response_t response;
-	response_init(&response);
-		
-
 	/** The server is now ready to accept requests. */
 	if (listen(sockfd, BACKLOG) < 0)
 		LISTEN_ERR_HANDLE;
 
-	if ((sockfd_2 = accept(sockfd, (struct sockaddr*) &remote_addr, &remote_addr_len)) < 0)
-		CONNECT_ERR_HANDLE;
-	
-	/** Reading the message sent from the client. */	
-	recv(sockfd_2, &client_msg, MSG_MAX_LEN, 0);	
-
-
-	char *file_name = get_file_name(client_msg);
-	char httdocs[255] = "./httdocs/";
-	
-	if (access(strcat(httdocs, file_name), F_OK) == 0) {
-		printf("OK");
-	}
-	else {
-		FILE *fptr = fopen("httdocs/err.html", "r");
+	while (1) {
+		if ((sockfd_2 = accept(sockfd, (struct sockaddr*) &remote_addr, &remote_addr_len)) < 0)
+			CONNECT_ERR_HANDLE;
 		
-		int file_size = get_file_size(fptr);
-		char *content = get_file_content(fptr, file_size);
-
-		fclose(fptr);
-
-		response.header.status.code = "404";
-		response.header.status.msg = "Not Found";
-		response.header.content_length = file_size;
-		response.content = response_createheader(response);
-
-		response.content = (char*)realloc(response.content, sizeof(char) * (HEADER_LEN + file_size + 1));
-		response.content = strcat(response.content, content);
-
-
-		send(sockfd_2, response.content, strlen(response.content) - 1, 0);
-
+		pthread_t thread;
+		pthread_create(&thread, NULL, handle_client, (void*)sockfd_2);
 	}
-	
-	/** Closing the connection socket. */
-	close(sockfd_2);
-
 	/** Closing the listening socket. */
 	shutdown(sockfd, SHUT_RDWR);
 
