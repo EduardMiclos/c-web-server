@@ -142,11 +142,11 @@ char *read_file(char *path, int *file_size) {
 
 void setup_response(response_t *response, char *client_msg) {
 	/** Extracting the name of the file from the request message. */
-	char file_name[255];
+	char file_name[256];
 	strcpy(file_name, get_file_name(client_msg));
 
 	/** Setting up the full path to the file. */
-	char path[255] = "./httdocs/";
+	char path[256] = "./httdocs/";
 	strcat(path, file_name);
 
 	/** If the file doesn't exist, return err.html with 404 error code. */
