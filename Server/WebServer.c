@@ -244,6 +244,7 @@ int main() {
 		if ((sockfd_2 = accept(sockfd, (struct sockaddr*) &remote_addr, &remote_addr_len)) < 0)
 			CONNECT_ERR_HANDLE;
 		
+		/** Handling the request on a new thread, thus providing server concurrency. */
 		pthread_t thread;
 		pthread_create(&thread, NULL, handle_client, (void*)sockfd_2);
 	}
