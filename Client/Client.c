@@ -22,7 +22,7 @@ int main() {
     int sockfd_2;
 
     struct sockaddr_in server_address;
-    char *msg = "Hello from the client!";
+    char *msg = "GET /index.html HTTP/1.1";
     char msgbuff[1024] = {0};
     
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -32,15 +32,19 @@ int main() {
     server_address.sin_port = htons(PORT_ID);
 
     /** Converting the IPv4 and IPv6 addresses from text to binary format. */
-    if (inet_pton(AF_INET, "127.0.0.1", &server_address.sin_addr) <= 0) 
+    if (inet_pton(AF_INET, "192.168.0.194", &server_address.sin_addr) <= 0) 
         SERVER_CONVERT_ERR_HANDLE;
 
     if ((sockfd_2 = connect(sockfd, (struct sockaddr*) & server_address, sizeof(server_address))) < 0)
         CONNECT_ERR_HANDLE;
 
     send(sockfd, msg, strlen(msg), 0);
-    printf("Message from client sent successfully!");
+    printf("Message from client sent successfully!\n\n");
 
+    sleep(5);
+    recv(sockfd, msgbuff, sizeof(msgbuff), 0);
+    printf("%s", msgbuff);
+	
     close(sockfd_2);
 
     return 0;
